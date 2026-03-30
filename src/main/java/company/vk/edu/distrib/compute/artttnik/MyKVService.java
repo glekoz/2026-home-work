@@ -38,7 +38,7 @@ public class MyKVService implements KVService {
             log.info("KVService started on port {}", port);
         } catch (IOException e) {
             log.error("Failed to start server on port {}", port, e);
-            throw new RuntimeException("Failed to start server on port " + port, e);
+            throw new ServerStartException("Failed to start server on port " + port, e);
         }
     }
 
@@ -53,6 +53,12 @@ public class MyKVService implements KVService {
                 log.debug("Failed to close Dao", e);
             }
             log.info("KVService stopped");
+        }
+    }
+
+    static final class ServerStartException extends RuntimeException {
+        ServerStartException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -72,12 +78,12 @@ public class MyKVService implements KVService {
     }
 
     private record EntityHandler(Dao<byte[]> dao) implements HttpHandler {
+        private static final String ID_PARAM = "id";
         private static final Logger log = LoggerFactory.getLogger(EntityHandler.class);
 
         @SuppressWarnings("PMD.GuardLogStatement")
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            var method = exchange.getRequestMethod();
             var id = extractId(exchange.getRequestURI().getQuery());
 
             if (id == null || id.isEmpty()) {
@@ -88,15 +94,7 @@ public class MyKVService implements KVService {
             }
 
             try {
-                switch (method) {
-                    case "GET" -> handleGet(exchange, id);
-                    case "PUT" -> handlePut(exchange, id);
-                    case "DELETE" -> handleDelete(exchange, id);
-                    default -> {
-                        log.warn("Unsupported method: {}", method);
-                        exchange.sendResponseHeaders(405, -1);
-                    }
-                }
+                dispatch(exchange, id);
             } catch (NoSuchElementException e) {
                 log.error("Entity not found: {}", id);
                 exchange.sendResponseHeaders(404, -1);
@@ -106,6 +104,19 @@ public class MyKVService implements KVService {
             } catch (Exception e) {
                 log.error("Internal error processing request", e);
                 exchange.sendResponseHeaders(500, -1);
+            }
+        }
+
+        private void dispatch(HttpExchange exchange, String id) throws IOException {
+            var method = exchange.getRequestMethod();
+            switch (method) {
+                case "GET" -> handleGet(exchange, id);
+                case "PUT" -> handlePut(exchange, id);
+                case "DELETE" -> handleDelete(exchange, id);
+                default -> {
+                    log.warn("Unsupported method: {}", method);
+                    exchange.sendResponseHeaders(405, -1);
+                }
             }
         }
 
@@ -144,7 +155,7 @@ public class MyKVService implements KVService {
             for (String param : query.split("&")) {
                 String[] kv = param.split("=", 2);
 
-                if (kv.length == 2 && "id".equals(kv[0])) {
+                if (kv.length == 2 && ID_PARAM.equals(kv[0])) {
                     return kv[1];
                 }
             }

@@ -21,7 +21,7 @@ public class MyDao implements Dao<byte[]> {
             this.storageDir = storageDir;
             Files.createDirectories(storageDir);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to create storage directory", e);
+            throw new StorageInitException("Failed to create storage directory", e);
         }
     }
 
@@ -67,5 +67,11 @@ public class MyDao implements Dao<byte[]> {
 
     private static String sanitizeFileName(String key) {
         return Base64.getUrlEncoder().encodeToString(key.getBytes(StandardCharsets.UTF_8));
+    }
+
+    static final class StorageInitException extends RuntimeException {
+        StorageInitException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 }
