@@ -26,11 +26,11 @@ public class EntityHandler extends BaseHttpHandler {
 
         switch (method) {
             case "GET":
-                byte[] bytes = getEntityDao(id);
-                sendAnswer(exchange, bytes, 200);
+                byte[] data = getEntityDao(id);
+                sendAnswer(exchange, data, 200);
                 break;
             case "PUT":
-                bytes = exchange.getRequestBody().readAllBytes();
+                byte[] bytes = exchange.getRequestBody().readAllBytes();
                 dao.upsert(id, bytes);
                 sendEmptyAnswer(exchange, 201);
                 break;
