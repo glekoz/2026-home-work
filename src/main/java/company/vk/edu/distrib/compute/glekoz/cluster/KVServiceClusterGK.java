@@ -33,14 +33,7 @@ public class KVServiceClusterGK implements KVCluster {
 
         if (node == null) {
             int port = parsePort(endpoint);
-
-            // try {
             node = new KVClusteredServiceGK(port, discovery);
-            // } catch (IOException e) {
-            //     throw new IllegalStateException("Failed at endpoint: " + endpoint, e);
-            // }
-
-            // node.setNodes(endpoints);
             nodesByEndpoints.put(endpoint, node);
         }
 

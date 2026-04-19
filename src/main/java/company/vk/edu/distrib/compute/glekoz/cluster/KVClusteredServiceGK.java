@@ -50,16 +50,21 @@ public class KVClusteredServiceGK extends KVServiceGK {
                 return;
             }
 
-            String method = exchange.getRequestMethod();
-            switch (method) {
-                case METHOD_GET -> handleGet(exchange, id);
-                case METHOD_PUT -> handlePut(exchange, id);
-                case METHOD_DELETE -> handleDelete(exchange, id);
-                default -> exchange.sendResponseHeaders(STATUS_METHOD_NOT_ALLOWED, -1);
-            }
+            handleLocal(exchange, id);
+
         } catch (Exception e) {
             log.error("Internal error during request handling", e);
             sendSafeResponse(exchange, STATUS_BAD_REQUEST);
+        }
+    }
+
+    private void handleLocal(HttpExchange exchange, String id) throws IOException {
+        String method = exchange.getRequestMethod();
+        switch (method) {
+            case METHOD_GET -> handleGet(exchange, id);
+            case METHOD_PUT -> handlePut(exchange, id);
+            case METHOD_DELETE -> handleDelete(exchange, id);
+            default -> exchange.sendResponseHeaders(STATUS_METHOD_NOT_ALLOWED, -1);
         }
     }
 
@@ -84,12 +89,6 @@ public class KVClusteredServiceGK extends KVServiceGK {
                     return;
                 }
             }
-            
-            // exchange.getRequestHeaders().forEach((key, values) -> {
-            //     if (!"Host".equalsIgnoreCase(key)) {
-            //         values.forEach(value -> requestBuilder.header(key, value));
-            //     }
-            // });
             
             HttpResponse<byte[]> response = httpClient.send(
                     requestBuilder.build(),
