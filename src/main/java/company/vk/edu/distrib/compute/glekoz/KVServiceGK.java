@@ -15,24 +15,24 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class KVServiceGK implements KVService {
-    private static final Logger log = LoggerFactory.getLogger(KVServiceGK.class);
-    
-    private static final String ENTITY_PATH = "/v0/entity";
-    private static final String STATUS_PATH = "/v0/status";
-    private static final String ID_PARAM = "id";
-    private static final String CONTENT_TYPE_HEADER = "Content-Type";
-    private static final String OCTET_STREAM = "application/octet-stream";
-    
-    private static final String METHOD_GET = "GET";
-    private static final String METHOD_PUT = "PUT";
-    private static final String METHOD_DELETE = "DELETE";
+    protected static final Logger log = LoggerFactory.getLogger(KVServiceGK.class);
 
-    private static final int STATUS_OK = 200;
-    private static final int STATUS_CREATED = 201;
-    private static final int STATUS_ACCEPTED = 202;
-    private static final int STATUS_BAD_REQUEST = 400;
-    private static final int STATUS_NOT_FOUND = 404;
-    private static final int STATUS_METHOD_NOT_ALLOWED = 405;
+    protected static final String ENTITY_PATH = "/v0/entity";
+    protected static final String STATUS_PATH = "/v0/status";
+    protected static final String ID_PARAM = "id";
+    protected static final String CONTENT_TYPE_HEADER = "Content-Type";
+    protected static final String OCTET_STREAM = "application/octet-stream";
+
+    protected static final String METHOD_GET = "GET";
+    protected static final String METHOD_PUT = "PUT";
+    protected static final String METHOD_DELETE = "DELETE";
+
+    protected static final int STATUS_OK = 200;
+    protected static final int STATUS_CREATED = 201;
+    protected static final int STATUS_ACCEPTED = 202;
+    protected static final int STATUS_BAD_REQUEST = 400;
+    protected static final int STATUS_NOT_FOUND = 404;
+    protected static final int STATUS_METHOD_NOT_ALLOWED = 405;
     
     private static final int SERVER_BACKLOG = 512;
 
@@ -65,7 +65,7 @@ public class KVServiceGK implements KVService {
         }
     }
 
-    private void handleEntity(HttpExchange exchange) {
+    protected void handleEntity(HttpExchange exchange) {
         try (exchange) {
             if (!ENTITY_PATH.equals(exchange.getRequestURI().getPath())) {
                 exchange.sendResponseHeaders(STATUS_NOT_FOUND, -1);
@@ -91,7 +91,7 @@ public class KVServiceGK implements KVService {
         }
     }
 
-    private String extractId(String query) {
+    protected String extractId(String query) {
         if (query == null || query.isEmpty()) {
             return null;
         }
@@ -104,7 +104,7 @@ public class KVServiceGK implements KVService {
         return null;
     }
 
-    private void handleGet(HttpExchange exchange, String id) throws IOException {
+    protected void handleGet(HttpExchange exchange, String id) throws IOException {
         try {
             byte[] response = dao.get(id);
 
@@ -120,18 +120,18 @@ public class KVServiceGK implements KVService {
         }
     }
 
-    private void handlePut(HttpExchange exchange, String id) throws IOException {
+    protected void handlePut(HttpExchange exchange, String id) throws IOException {
         byte[] body = exchange.getRequestBody().readAllBytes();
         dao.upsert(id, body);
         exchange.sendResponseHeaders(STATUS_CREATED, -1);
     }
 
-    private void handleDelete(HttpExchange exchange, String id) throws IOException {
+    protected void handleDelete(HttpExchange exchange, String id) throws IOException {
         dao.delete(id);
         exchange.sendResponseHeaders(STATUS_ACCEPTED, -1);
     }
 
-    private void sendSafeResponse(HttpExchange exchange, int code) {
+    protected void sendSafeResponse(HttpExchange exchange, int code) {
         try {
             exchange.sendResponseHeaders(code, -1);
         } catch (IOException e) {
