@@ -15,7 +15,7 @@ public class ReplicationManager {
     private final Logger log = LoggerFactory.getLogger(ReplicationManager.class);
     private static final String LOCALHOST = "http://localhost:";
     private final int replicationFactor;
-    private final int minReplicas = 3;
+    private static final int MIN_REPLICAS = 3;
     private static final int MAX_PORT_ATTEMPTS = 100;
 
     public ReplicationManager(int port) {
@@ -98,7 +98,7 @@ public class ReplicationManager {
 
         try {
             int res = Integer.parseInt(value);
-            if (res < minReplicas) {
+            if (res < MIN_REPLICAS) {
                 throw new IllegalArgumentException("At least 3 replicas expected");
             }
             return res;

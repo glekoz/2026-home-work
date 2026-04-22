@@ -25,7 +25,7 @@ public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedSer
     private static final Logger log = LoggerFactory.getLogger(KVServiceReplicationGK.class);
     private final ReplicationManager repMan;
     private final HttpClient httpClient;
-    private final int minAcks = 1;
+    private static final int MIN_ACKS = 1;
 
     public KVServiceReplicationGK(int port) {
         super(port);
@@ -236,7 +236,7 @@ public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedSer
                 String value = param.substring(4);
                 try {
                     int res = Integer.parseInt(value);
-                    if (res < minAcks) {
+                    if (res < MIN_ACKS) {
                         log.warn("unacceptable ack value {}", res);
                         return rf / 2 + 1;
                     }
