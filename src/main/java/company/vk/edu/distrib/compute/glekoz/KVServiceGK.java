@@ -40,6 +40,7 @@ public class KVServiceGK implements KVService {
 
     private final HttpServer server;
     private final FileSystemDao dao;
+    // private final AtomicBoolean isRunning = new AtomicBoolean(true);
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
     public KVServiceGK(int port) {
@@ -68,11 +69,6 @@ public class KVServiceGK implements KVService {
 
     protected void handleEntity(HttpExchange exchange) {
         try (exchange) {
-            if (!ENTITY_PATH.equals(exchange.getRequestURI().getPath())) {
-                exchange.sendResponseHeaders(STATUS_NOT_FOUND, -1);
-                return;
-            }
-
             String id = extractId(exchange);
             if (id == null || id.isEmpty()) {
                 exchange.sendResponseHeaders(STATUS_BAD_REQUEST, -1);
@@ -108,7 +104,6 @@ public class KVServiceGK implements KVService {
     protected void handleGet(HttpExchange exchange, String id) throws IOException {
         try {
             byte[] response = dao.get(id);
-
             exchange.getResponseHeaders().set(CONTENT_TYPE_HEADER, OCTET_STREAM);
             exchange.sendResponseHeaders(STATUS_OK, response.length == 0 ? -1 : response.length);
             if (response.length > 0) {

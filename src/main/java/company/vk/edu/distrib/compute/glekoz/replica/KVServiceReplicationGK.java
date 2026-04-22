@@ -2,6 +2,7 @@ package company.vk.edu.distrib.compute.glekoz.replica;
 
 import company.vk.edu.distrib.compute.glekoz.KVServiceGK;
 import company.vk.edu.distrib.compute.ReplicatedService;
+import company.vk.edu.distrib.compute.glekoz.replica.records.ProxyResult;
 
 import com.sun.net.httpserver.HttpExchange;
 import org.slf4j.Logger;
@@ -13,45 +14,20 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.Map;
 import java.util.ArrayList;
 import java.util.List;
-
-record HostNode(String host, KVServiceGK node) {}
-
-record ProxyResult(int statusCode, byte[] body, boolean isSuccess) {
-    public static ProxyResult success(int statusCode, byte[] body) {
-        return new ProxyResult(statusCode, body, true);
-    }
-    
-    public static ProxyResult error(int statusCode) {
-        return new ProxyResult(statusCode, null, false);
-    }
-    
-    public static ProxyResult error(Exception e) {
-        return new ProxyResult(500, null, false);
-    }
-}
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.nio.ByteBuffer;
 
 public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedService {
-    protected static final Logger log = LoggerFactory.getLogger(KVServiceReplicationGK.class);
-    private static final String LOCALHOST = "http://localhost:";
-    private static final int MAX_PORT_ATTEMPTS = 5;
-
-    private final Map<Integer, HostNode> nodesByIDs = new ConcurrentHashMap<>();
-    private final int replicationFactor;
-
+    private static final Logger log = LoggerFactory.getLogger(KVServiceReplicationGK.class);
+    private final ReplicationManager repMan;
     private final HttpClient httpClient;
 
     public KVServiceReplicationGK(int port) {
         super(port);
-        this.replicationFactor = getReplicationFactor();
-        
-        for (int nodeId = 0; nodeId < replicationFactor; nodeId++) {
-            HostNode hostNode = startService(nodeId);
-            nodesByIDs.put(nodeId, hostNode);
-        }
+        this.repMan = new ReplicationManager(port);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
@@ -60,11 +36,6 @@ public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedSer
     @Override
     protected void handleEntity(HttpExchange exchange) {
         try (exchange) {
-            if (!ENTITY_PATH.equals(exchange.getRequestURI().getPath())) {
-                exchange.sendResponseHeaders(STATUS_NOT_FOUND, -1);
-                return;
-            }
-
             String id = extractId(exchange);
             if (id == null || id.isEmpty()) {
                 exchange.sendResponseHeaders(STATUS_BAD_REQUEST, -1);
@@ -72,51 +43,15 @@ public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedSer
             }
 
             int ack = extractAck(exchange);
-
-            if (ack > replicationFactor) {
+            if (ack > repMan.getReplicationFactor()) {
                 exchange.sendResponseHeaders(STATUS_BAD_REQUEST, -1);
                 return;
             }
 
             byte[] reqBody = exchange.getRequestBody().readAllBytes();
-            List<ProxyResult> list = new ArrayList<>();
-            for (int nodeId = 0; nodeId < ack; nodeId++) {
-                HostNode hostNode = nodesByIDs.get(nodeId);
-                log.info("Proxying request for id={} to {}", id, hostNode.host());
-                list.add(proxyRequest(exchange, hostNode.host(), id, reqBody));
-            }
-            int sc = 400;
-            byte[] b = null;
-            int okCount = 0;
-            for (ProxyResult pr : list) {
-                if (pr.isSuccess()) {
-                    okCount++;
-                    sc = pr.statusCode();
-                    b = pr.body();
-                }
-            }
-            String method = exchange.getRequestMethod();
-            if (okCount >= ack) {
-                if (METHOD_GET.equals(method) && sc != STATUS_NOT_FOUND) {
-                    exchange.getResponseHeaders().set(CONTENT_TYPE_HEADER, OCTET_STREAM);
-                    if (b != null) {
-                        exchange.sendResponseHeaders(STATUS_OK, b.length == 0 ? -1 : b.length);
-                    }
-                     if (b != null && b.length > 0) {
-                        try (OutputStream os = exchange.getResponseBody()) {
-                            os.write(b);
-                        }
-                    }
-                } else {
-                    exchange.sendResponseHeaders(sc, -1);
-                }
-            } else {
-                String errorMsg = "Internal Server Error: only " + okCount + "/" + ack + " replicas responded";
-                exchange.sendResponseHeaders(500, errorMsg.getBytes().length);
-                try (OutputStream os = exchange.getResponseBody()) {
-                    os.write(errorMsg.getBytes());
-                }
-            }
+            
+            List<ProxyResult> results = proxyToReplicas(exchange, id, reqBody); // new ArrayList<>();
+            handleReplicasResponses(exchange, results, ack);
 
         } catch (Exception e) {
             log.error("Internal error during request handling", e);
@@ -131,94 +66,124 @@ public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedSer
 
     @Override
     public int numberOfReplicas() {
-        return replicationFactor;
+        return repMan.getReplicationFactor();
     }
 
     @Override
     public void disableReplica(int nodeId) {
-        HostNode hostNode = nodesByIDs.get(nodeId);
-        if (hostNode == null) {
-            log.warn("Attempted to disable non-existent replica with ID: {}", nodeId);
-            return;
-        }
-        
-        try {
-            KVServiceGK service = hostNode.node();
-            service.stop();
-        } catch (Exception e) {
-            log.error("Failed to disable replica with ID: {}", nodeId, e);
-            throw new IllegalStateException("Failed to disable replica: " + nodeId, e);
-        }
+        repMan.disableReplica(nodeId);
     }
 
     @Override
     public void enableReplica(int nodeId) {
-        HostNode hostNode = nodesByIDs.get(nodeId);
-        if (hostNode == null) {
-            log.warn("Attempted to enable non-existent replica with ID: {}", nodeId);
+        repMan.enableReplica(nodeId);
+    }
+
+    private List<ProxyResult> proxyToReplicas(HttpExchange exchange, String id, byte[] body) {
+        List<ProxyResult> results = new ArrayList<>();
+        for (String host : repMan.getReplicaHostList()) {
+            ProxyResult res = proxyRequest(exchange, host, id, body);
+            results.add(res);
+        }
+        return results;
+    }
+
+    private void handleReplicasResponses(HttpExchange exchange, List<ProxyResult> results, int ack) throws IOException {
+        int successCount = 0;
+        
+        Map<Integer, Integer> statusCount = new ConcurrentHashMap<>();
+        Map<ByteBuffer, Integer> bodyCount = new ConcurrentHashMap<>();
+        
+        for (ProxyResult r : results) {
+            if (r.isSuccess()) {
+                successCount++;
+                
+                int status = r.statusCode();
+                statusCount.put(status, statusCount.getOrDefault(status, 0) + 1);
+                
+                ByteBuffer bodyKey = r.body() != null ? ByteBuffer.wrap(r.body()) : null;
+                bodyCount.put(bodyKey, bodyCount.getOrDefault(bodyKey, 0) + 1);
+            }
+        }
+        
+        if (successCount < ack) {
+            sendReplicaError(exchange, successCount, ack);
             return;
         }
         
-        try {
-            hostNode.node().start(); 
-        } catch (Exception e) {
-            log.error("Failed to enable replica with ID: {}", nodeId, e);
-            throw new IllegalStateException("Failed to enable replica: " + nodeId, e);
-        }
+        int mostFrequentStatus = findMostFrequentInt(statusCount);
+        byte[] mostFrequentBody = findMostFrequentByteArray(bodyCount);
+        
+        sendSuccessResponse(exchange, mostFrequentStatus, mostFrequentBody);
     }
 
-    private HostNode startService(int nodeId) {
-        int portAttempt = 0;
+    private int findMostFrequentInt(Map<Integer, Integer> countMap) {
+        int maxCount = 0;
+        int mostFrequent = 400;
         
-        while (portAttempt < MAX_PORT_ATTEMPTS) {
-            int nodePort = port + 1 + nodeId + portAttempt;
-            
-            try {
-                KVServiceGK service = new KVServiceGK(nodePort);
-                service.start();
-                
-                String endpoint = toEndpoint(nodePort);
-                return new HostNode(endpoint, service);
-                
-            } catch (Exception e) {
-                log.warn("Failed to start service on port {} for node ID {}: {}", 
-                        port, nodeId, e.getMessage());
-                portAttempt++;
-                
-                if (portAttempt >= MAX_PORT_ATTEMPTS) {
-                    throw new IllegalStateException(
-                        String.format("Failed to start service for node ID %d after %d attempts", 
-                                    nodeId, MAX_PORT_ATTEMPTS), e);
-                }
+        for (Map.Entry<Integer, Integer> entry : countMap.entrySet()) {
+            if (entry.getValue() > maxCount) {
+                maxCount = entry.getValue();
+                mostFrequent = entry.getKey();
             }
         }
         
-        throw new IllegalStateException("Unable to start service for node ID: " + nodeId);
+        return mostFrequent;
     }
 
-    private int getReplicationFactor() {
-        String value = System.getenv("REPLICATION_FACTOR");
-
-        if (value == null || value.isBlank()) {
-            return 1;
-        }
-
-        try {
-            int res = Integer.parseInt(value);
-            if (res < 1) {
-                throw new IllegalArgumentException("Replication factor must be > 0");
+    private byte[] findMostFrequentByteArray(Map<ByteBuffer, Integer> countMap) {
+        int maxCount = 0;
+        ByteBuffer mostFrequent = null;
+        
+        for (Map.Entry<ByteBuffer, Integer> entry : countMap.entrySet()) {
+            if (entry.getValue() > maxCount) {
+                maxCount = entry.getValue();
+                mostFrequent = entry.getKey();
             }
-            return res;
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid replication factor env value: " + value, e);
+        }
+        
+        if (mostFrequent != null) {
+            byte[] array = mostFrequent.array();
+            byte[] result = new byte[array.length];
+            System.arraycopy(array, mostFrequent.position(), result, 0, array.length);
+            return result;
+        }
+        
+        return null;
+    }
+
+    private void sendSuccessResponse(HttpExchange exchange, int status, byte[] body) throws IOException {
+        String method = exchange.getRequestMethod();
+
+        if (METHOD_GET.equals(method) && status != STATUS_NOT_FOUND) {
+            exchange.getResponseHeaders().set(CONTENT_TYPE_HEADER, OCTET_STREAM);
+
+            if (body == null || body.length == 0) {
+                exchange.sendResponseHeaders(STATUS_OK, -1);
+                return;
+            }
+
+            exchange.sendResponseHeaders(STATUS_OK, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+            return;
+        }
+
+        exchange.sendResponseHeaders(status, -1);
+    }
+
+    private void sendReplicaError(HttpExchange exchange, int ok, int ack) throws IOException {
+        String msg = "Internal Server Error: only " + ok + "/" + ack + " replicas responded";
+        byte[] bytes = msg.getBytes();
+
+        exchange.sendResponseHeaders(500, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
         }
     }
 
-    private String toEndpoint(int port) {
-        return LOCALHOST + port;
-    }
-
-    private ProxyResult proxyRequest(HttpExchange exchange, String targetNode, String id, byte[] body) throws IOException {
+    private ProxyResult proxyRequest(HttpExchange exchange, String targetNode, String id, byte[] body) {
         String method = exchange.getRequestMethod();
         String targetUrl = targetNode + ENTITY_PATH + "?" + ID_PARAM + "=" + id;
         
@@ -246,22 +211,23 @@ public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedSer
 
             int statusCode = response.statusCode();
             byte[] resBody = response.body();
-
-            if (statusCode >= 200 && statusCode < 300 || statusCode == STATUS_NOT_FOUND) {
+            
+            if (statusCode < 500) {
                 return ProxyResult.success(statusCode, resBody);
             } else {
                 return ProxyResult.error(statusCode);
             }
         } catch (Exception e) {
-            log.error("Proxy request failed: {}", e.getMessage());
+            log.error("Proxy request failed: {}", e);
             return ProxyResult.error(e);
         }
     }
 
     protected int extractAck(HttpExchange exchange) {
+        int rf = repMan.getReplicationFactor();
         String query = exchange.getRequestURI().getQuery();
         if (query == null) {
-            return replicationFactor / 2 + 1;
+            return rf / 2 + 1;
         }
         for (String param : query.split("&")) {
             if (param.startsWith("ack=")) {
@@ -270,15 +236,15 @@ public class KVServiceReplicationGK extends KVServiceGK implements ReplicatedSer
                     int res = Integer.parseInt(value);
                     if (res < 1) {
                         log.warn("unacceptable ack value {}", res);
-                        return replicationFactor / 2 + 1;
+                        return rf / 2 + 1;
                     }
                     return res;
                 } catch (NumberFormatException e) {
                     log.warn("unacceptable ack value {}", value, e);
-                    return replicationFactor / 2 + 1;
+                    return rf / 2 + 1;
                 }
             }
         }
-        return replicationFactor / 2 + 1;
+        return rf / 2 + 1;
     }
 }
